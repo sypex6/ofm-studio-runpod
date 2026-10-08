@@ -20,8 +20,11 @@ jobs:
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
           df -h /
-      - name: Check graph builders
-        run: python -m unittest discover -s tests -p test_runpod_graph.py
+      - name: Check graphs and resumable downloads
+        run: |
+          python -m pip install requests filelock
+          python -m unittest discover -s tests -p 'test_runpod_graph.py'
+          python -m unittest discover -s tests -p 'test_runpod_downloads.py'
       - name: Image name
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ofm-studio-runpod" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@v3
