@@ -1,0 +1,7 @@
+[
+  {"name":"ComfyUI-KJNodes","url":"https://github.com/kijai/ComfyUI-KJNodes","commit":"d3cfe21625e5170126ce06fbfcfe1d88108688c3"},
+  {"name":"ComfyUI-WanVideoWrapper","url":"https://github.com/kijai/ComfyUI-WanVideoWrapper","commit":"088128b224242e110d3906c6750e9a3a348a659b"},
+  {"name":"ComfyUI-WanAnimatePreprocess","url":"https://github.com/kijai/ComfyUI-WanAnimatePreprocess","commit":"0e0b6a2a555625acf4d4aefb780e27d06937132f"},
+  {"name":"ComfyUI-VideoHelperSuite","url":"https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite","commit":"4d907bee61e92c2e65af3bd6383a4e4d356126d1"},
+  {"name":"comfyui-teskors-utils","url":"https://github.com/sypex6/comfyui-teskors-utils","commit":"5c401d68c2f8b84aa10951e36de67917cb925579"}
+]
