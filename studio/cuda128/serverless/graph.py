@@ -24,9 +24,8 @@ def combine_inputs(images, audio, fps, prefix):
 
 
 def native(image, video, params, frames, prefix):
-    """Animate X: unroll the UI loop into explicit overlapping 77-frame blocks."""
-    source = json.loads(next(WORKFLOWS.glob('Animate X*.json')).read_text(encoding='utf-8'))
-    original = {n['id']: n for n in source['nodes']}
+    """Kiara Animate: unroll its loop into overlapping 77-frame blocks."""
+    original = json.loads((WORKFLOWS / 'Kiara Animate API.json').read_text(encoding='utf-8'))
     g = Graph()
     w, h, fps = params['width'], params['height'], params['fps']
     ref = g.add('LoadImage', image=image)
@@ -39,19 +38,23 @@ def native(image, video, params, frames, prefix):
     faces = g.add('PoseAndFaceDetection', slot=1, model=detector, images=vid, width=w, height=h)
     poses = g.add('DrawViTPose', pose_data=[faces[0], 0], width=w, height=h,
                  retarget_padding=10, body_stick_width=-1, hand_stick_width=-1, draw_head='True')
-    model = g.add('UNETLoader', unet_name='WanModel.safetensors', weight_dtype='fp8_e4m3fn_fast')
+    loader = copy.deepcopy(original['356']['inputs'])
+    # Same basename as SSIBAL, but the supplied repositories contain different weights.
+    loader['unet_name'] = 'kiara/' + loader['unet_name']
+    model = g.add('UNETLoader', **loader)
     for ident in (355, 327):
-        name, strength = original[ident]['widgets_values']
-        model = g.add('LoraLoaderModelOnly', model=model, lora_name=name, strength_model=strength)
+        inputs = copy.deepcopy(original[str(ident)]['inputs'])
+        inputs['model'] = model
+        model = g.add('LoraLoaderModelOnly', **inputs)
     # Use SDPA and offloading; CUDA compilation and SageAttention are optional optimizations,
     # not dependencies of the animation or cold-start requirements.
-    model = g.add('ModelSamplingSD3', model=model, shift=8.0)
-    clip = g.add('CLIPLoader', clip_name='text_enc.safetensors', type='wan', device='default')
-    vae = g.add('VAELoader', vae_name='vae.safetensors')
-    vision = g.add('CLIPVisionLoader', clip_name='klip_vision.safetensors')
+    model = g.add('ModelSamplingSD3', model=model, shift=original['330']['inputs']['shift'])
+    clip = g.add('CLIPLoader', **original['333']['inputs'])
+    vae = g.add('VAELoader', **original['329']['inputs'])
+    vision = g.add('CLIPVisionLoader', **original['348']['inputs'])
     vision = g.add('CLIPVisionEncode', clip_vision=vision, image=ref, crop='none')
     pos = g.add('CLIPTextEncode', clip=clip, text=params['prompt'])
-    neg = g.add('CLIPTextEncode', clip=clip, text=original[335]['widgets_values'][0])
+    neg = g.add('CLIPTextEncode', clip=clip, text=original['335']['inputs']['text'])
     previous, accumulated, offset, produced = None, None, 0, 0
     while produced < frames:
         overlap = 5 if previous else 0
@@ -78,40 +81,23 @@ def native(image, video, params, frames, prefix):
 
 
 def wrapper(image, video, params, frames, prefix):
-    """Resolve frontend Set/Get variables; preserve the original backend graph."""
-    doc = json.loads(next(WORKFLOWS.glob('SSIBALHUB*.json')).read_text(encoding='utf-8'))
-    nodes = {str(n['id']): n for n in doc['nodes']}
-    links = {l[0]: [str(l[1]), l[2]] for l in doc['links']}
-    setters = {n['widgets_values'][0]: n for n in nodes.values() if n['type'] == 'SetNode'}
+    """Use the supplied SSIBAL API export; retain only final-output dependencies."""
+    nodes = json.loads((WORKFLOWS / 'SSIBAL Animate API.json').read_text(encoding='utf-8'))
     graph = {}
     def resolve(node_id, slot=0):
         node = nodes[str(node_id)]
-        if node['type'] in ('GetNode', 'SetNode'):
-            name = node['widgets_values'][0]
-            if name in ('width', 'height', 'num_frames'):
-                return {'width': params['width'], 'height': params['height'], 'num_frames': frames}[name]
-            parent = setters[name]
-            return resolve(*links[parent['inputs'][0]['link']])
-        if node['type'] == 'easy float':
-            return node['widgets_values'][0]
+        if node['class_type'] == 'easy float':
+            return node['inputs']['value']
         key = str(node_id)
         if key in graph:
             return [key, slot]
-        graph[key] = {'class_type': node['type'], 'inputs': {}}
-        values = copy.deepcopy(node.get('widgets_values') or [])
-        widgets = values if isinstance(values, dict) else {}
-        if isinstance(values, list):
-            cursor = 0
-            for inp in node.get('inputs', []):
-                if inp.get('widget'):
-                    widgets[inp['name']] = values[cursor]
-                    cursor += 1
-                    if inp['name'] in ('seed', 'noise_seed') and cursor < len(values) and values[cursor] in ('randomize', 'fixed', 'increment', 'decrement'):
-                        cursor += 1
-        inputs = {k: v for k, v in widgets.items() if k != 'videopreview'}
-        for inp in node.get('inputs', []):
-            if inp.get('link') is not None:
-                inputs[inp['name']] = resolve(*links[inp['link']])
+        graph[key] = {'class_type': node['class_type'], 'inputs': {}}
+        inputs = copy.deepcopy(node['inputs'])
+        for name, value in inputs.items():
+            if name in ('width', 'height'):
+                inputs[name] = params[name]
+            elif isinstance(value, list) and len(value) == 2 and isinstance(value[0], str) and type(value[1]) is int:
+                inputs[name] = resolve(*value)
         graph[key]['inputs'] = inputs
         if key == '76':
             inputs['image'] = image
@@ -122,17 +108,21 @@ def wrapper(image, video, params, frames, prefix):
             inputs['text'] = params['prompt']
         elif key == '273':
             inputs.update(seed=params['seed'], steps=params['steps'])
+            if inputs.get('batched_cfg') == '':
+                inputs['batched_cfg'] = False
         elif key == '354':
             inputs['lora_1'] = 'Wan2.2-I2V-A14B-4steps-lora-rank64-Seko-V1-low_noise_model.safetensors'
         elif key == '270':
-            inputs['frame_window_size'] = 81
+            inputs.update(frame_window_size=81, num_frames=frames)
         elif key == '562':
-            # TS node otherwise writes diagnostic copies of every window.
-            inputs.update(fps=params['fps'], save_individual_chunks=False, debug=False)
+            inputs['chunk_size'] = 81
         elif key == '751':
             inputs.update(frame_rate=params['fps'], filename_prefix=prefix, save_output=True)
         return [key, slot]
     resolve('751')
+    graph['studio_frame_limit'] = {'class_type': 'GetImageRangeFromBatch',
+                                  'inputs': {'images': ['562', 0], 'start_index': 0, 'num_frames': frames}}
+    graph['751']['inputs']['images'] = ['studio_frame_limit', 0]
     return graph, '751'
 
 

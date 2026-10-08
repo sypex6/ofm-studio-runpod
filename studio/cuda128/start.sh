@@ -3,6 +3,7 @@ set -euo pipefail
 cd /opt/studio-worker/serverless
 test -d /runpod-volume || { echo 'Attach a Runpod Network Volume at /runpod-volume'; exit 1; }
 test -n "${STUDIO_HOST:-}" || { echo 'Set STUDIO_HOST to the Studio hostname'; exit 1; }
+df -h /runpod-volume /tmp
 profiles="${WORKFLOW_PROFILES:-animate-ki,animate-wrapper}"
 if [ "${DOWNLOAD_MODELS:-0}" = '1' ]; then
     python prepare_models.py --profiles "$profiles"

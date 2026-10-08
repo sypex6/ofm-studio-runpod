@@ -37,6 +37,7 @@ class GraphTests(unittest.TestCase):
         self.assertEqual(graph['273']['inputs']['seed'], PARAMS['seed'])
         self.assertIs(graph['273']['inputs']['force_offload'], True)
         self.assertEqual(graph['273']['inputs']['scheduler'], 'dpm++_sde')
+        self.assertIs(graph['273']['inputs']['batched_cfg'], False)
         self.assertEqual(graph['270']['inputs']['num_frames'],149)
         self.assertEqual(graph['270']['inputs']['width'],480)
         self.assertEqual(graph['270']['inputs']['height'],832)
@@ -67,9 +68,34 @@ class GraphTests(unittest.TestCase):
                 for key,value in node['inputs'].items():
                     if key in ('model','model_name','unet_name','vae_name','clip_name','vitpose_model','yolo_model','lora_name') or key.startswith('lora_'):
                         if isinstance(value,str) and value.endswith(('.safetensors','.onnx')):
-                            self.assertIn(value,names)
+                            self.assertIn(Path(value).name,names)
         self.assertIn('vitpose_h_wholebody_data.bin',names)
         self.assertTrue(all(m['revision']!='main' for m in entries))
+
+    def test_same_named_main_models_are_separate_and_match_supplied_sources(self):
+        entries=json.loads(Path('studio/cuda128/serverless/models.json').read_text())
+        main=[m for m in entries if m['path'].startswith('diffusion_models/')]
+        self.assertEqual(len(main),2)
+        self.assertNotEqual(main[0]['sha256'],main[1]['sha256'])
+        graph,_=native('x.png','y.mp4',PARAMS,237,'studio/test/result')
+        self.assertEqual(next(n['inputs']['unet_name'] for n in graph.values() if n['class_type']=='UNETLoader'),
+                         'kiara/Wan2_2-Animate-14B_fp8_scaled_e4m3fn_KJ_v2.safetensors')
+        strengths=[n['inputs']['strength_model'] for n in graph.values() if n['class_type']=='LoraLoaderModelOnly']
+        self.assertAlmostEqual(strengths[0],0.95)
+        self.assertAlmostEqual(strengths[1],0.3)
+
+    def test_kiara_duration_uses_requested_fps_without_exported_25_30_mismatch(self):
+        for fps in (8,25,30):
+            params={**PARAMS,'fps':fps}
+            frames=((8*fps-1)//4)*4+1
+            graph,output=native('x.png','y.mp4',params,frames,'studio/duration/result')
+            load=next(n['inputs'] for n in graph.values() if n['class_type']=='VHS_LoadVideo')
+            self.assertEqual(load['force_rate'],fps)
+            self.assertEqual(load['skip_first_frames'],0)
+            count=sum(n['inputs']['num_frames'] for n in graph.values() if n['class_type']=='GetImageRangeFromBatch')
+            self.assertEqual(count,frames)
+            self.assertEqual(graph[output]['inputs']['frame_rate'],fps)
+            self.assertLess(8-count/fps,4/fps)
 
 
 if __name__ == '__main__':

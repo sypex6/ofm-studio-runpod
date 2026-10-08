@@ -1,7 +1,7 @@
 # Build context: studio/cuda128. Models live on Network Volume, never in the image.
 FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 \
-    COMFY_ROOT=/opt/ComfyUI HF_HOME=/runpod-volume/huggingface \
+    COMFY_ROOT=/opt/ComfyUI HF_HOME=/runpod-volume/huggingface HF_HUB_DISABLE_XET=1 \
     WORKFLOW_PROFILES=animate-ki,animate-wrapper
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git ffmpeg libgl1 libglib2.0-0 build-essential curl ca-certificates \
@@ -15,6 +15,7 @@ RUN python -c "import torch,torchvision,torchaudio; open('/opt/torch-constraints
     && pip install --no-cache-dir -c /opt/torch-constraints.txt runpod requests filelock huggingface_hub onnxruntime-gpu color-matcher
 COPY serverless /opt/studio-worker/serverless
 RUN python /opt/studio-worker/serverless/install_nodes.py \
+    && python /opt/studio-worker/serverless/patch_nodes.py \
     && python -c "import torch; assert torch.version.cuda == '12.8', torch.version.cuda"
 COPY workflows /opt/studio-worker/workflows
 RUN python /opt/studio-worker/serverless/check_registry.py

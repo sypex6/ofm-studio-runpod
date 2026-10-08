@@ -1,0 +1,98 @@
+[
+  {
+    "url": "https://github.com/sypex6/comfyui-teskors-utils",
+    "installed": true,
+    "commit": "5c401d68c2f8b84aa10951e36de67917cb925579",
+    "reason": "Required by the reachable animation API graph."
+  },
+  {
+    "url": "https://github.com/kijai/ComfyUI-WanVideoWrapper",
+    "installed": true,
+    "commit": "088128b224242e110d3906c6750e9a3a348a659b",
+    "reason": "Required by the reachable animation API graph."
+  },
+  {
+    "url": "https://github.com/rgthree/rgthree-comfy",
+    "installed": false,
+    "commit": null,
+    "reason": "UI helpers, diagnostics, URL/S3 helpers or disabled/manual segmentation; not required by the adapted final-output API graph."
+  },
+  {
+    "url": "https://github.com/kijai/ComfyUI-KJNodes",
+    "installed": true,
+    "commit": "d3cfe21625e5170126ce06fbfcfe1d88108688c3",
+    "reason": "Required by the reachable animation API graph."
+  },
+  {
+    "url": "https://github.com/yolain/ComfyUI-Easy-Use",
+    "installed": false,
+    "commit": null,
+    "reason": "UI helpers, diagnostics, URL/S3 helpers or disabled/manual segmentation; not required by the adapted final-output API graph."
+  },
+  {
+    "url": "https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite",
+    "installed": true,
+    "commit": "4d907bee61e92c2e65af3bd6383a4e4d356126d1",
+    "reason": "Required by the reachable animation API graph."
+  },
+  {
+    "url": "https://github.com/cubiq/ComfyUI_essentials",
+    "installed": false,
+    "commit": null,
+    "reason": "UI helpers, diagnostics, URL/S3 helpers or disabled/manual segmentation; not required by the adapted final-output API graph."
+  },
+  {
+    "url": "https://github.com/wuwukaka/ComfyUI-WanAnimatePlus",
+    "installed": false,
+    "commit": null,
+    "reason": "UI helpers, diagnostics, URL/S3 helpers or disabled/manual segmentation; not required by the adapted final-output API graph."
+  },
+  {
+    "url": "https://github.com/olduvai-jp/ComfyUI-S3-IO",
+    "installed": false,
+    "commit": null,
+    "reason": "UI helpers, diagnostics, URL/S3 helpers or disabled/manual segmentation; not required by the adapted final-output API graph."
+  },
+  {
+    "url": "https://github.com/LeonQ8/ComfyUI-Dynamic-Lora-Scheduler",
+    "installed": false,
+    "commit": null,
+    "reason": "UI helpers, diagnostics, URL/S3 helpers or disabled/manual segmentation; not required by the adapted final-output API graph."
+  },
+  {
+    "url": "https://github.com/bollerdominik/ComfyUI-load-lora-from-url",
+    "installed": false,
+    "commit": null,
+    "reason": "UI helpers, diagnostics, URL/S3 helpers or disabled/manual segmentation; not required by the adapted final-output API graph."
+  },
+  {
+    "url": "https://github.com/kijai/ComfyUI-WanAnimatePreprocess",
+    "installed": true,
+    "commit": "0e0b6a2a555625acf4d4aefb780e27d06937132f",
+    "reason": "Required by the reachable animation API graph."
+  },
+  {
+    "url": "https://github.com/chflame163/ComfyUI_LayerStyle",
+    "installed": false,
+    "commit": null,
+    "reason": "UI helpers, diagnostics, URL/S3 helpers or disabled/manual segmentation; not required by the adapted final-output API graph."
+  },
+  {
+    "url": "https://github.com/ltdrdata/was-node-suite-comfyui",
+    "installed": false,
+    "commit": null,
+    "reason": "UI helpers, diagnostics, URL/S3 helpers or disabled/manual segmentation; not required by the adapted final-output API graph."
+  },
+  {
+    "url": "https://github.com/kijai/ComfyUI-segment-anything-2",
+    "installed": false,
+    "commit": null,
+    "reason": "UI helpers, diagnostics, URL/S3 helpers or disabled/manual segmentation; not required by the adapted final-output API graph."
+  },
+  {
+    "url": "https://github.com/pythongosssss/ComfyUI-Custom-Scripts",
+    "installed": false,
+    "commit": null,
+    "reason": "UI helpers, diagnostics, URL/S3 helpers or disabled/manual segmentation; not required by the adapted final-output API graph."
+  }
+]
