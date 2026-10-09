@@ -123,6 +123,10 @@ def wrapper(image, video, params, frames, prefix):
     graph['studio_frame_limit'] = {'class_type': 'GetImageRangeFromBatch',
                                   'inputs': {'images': ['562', 0], 'start_index': 0, 'num_frames': frames}}
     graph['751']['inputs']['images'] = ['studio_frame_limit', 0]
+    # Use the same well-defined completion/output contract as Kiara.
+    # Keep SSIBAL's color-matched frames and the original audio connection.
+    graph['751'] = {'class_type': 'VHS_VideoCombine', 'inputs': combine_inputs(
+        ['studio_frame_limit', 0], graph['751']['inputs']['audio'], params['fps'], prefix)}
     return graph, '751'
 
 

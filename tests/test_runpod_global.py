@@ -82,6 +82,26 @@ class GlobalVolumeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 publish(self.source, target, ['animate-ki'], [self.model])
 
+    def test_direct_preparation_creates_readiness_without_posix_operations(self):
+        original = Path.read_text
+        def read(path, *args, **kwargs):
+            if path.name == 'models.json':
+                return json.dumps([self.model])
+            return original(path, *args, **kwargs)
+        def fetch(model, target, token, object_storage=False):
+            self.assertTrue(object_storage)
+            self.assertFalse(target.with_suffix('.bin.complete.json').exists())
+            target.write_bytes(self.payload)
+        with patch.object(Path, 'read_text', read), \
+                patch.object(Path, 'replace', side_effect=AssertionError('rename')), \
+                patch.dict('sys.modules', {'filelock': SimpleNamespace(
+                    FileLock=lambda *args, **kwargs: self.fail('lock on writer'))}), \
+                patch('studio.cuda128.serverless.prepare_models.shutil.disk_usage',
+                      side_effect=AssertionError('disk guard on object storage')), \
+                patch('studio.cuda128.serverless.prepare_models.download', side_effect=fetch):
+            prepare(self.destination, ['animate-ki'], global_write=True)
+        self.check()
+
 
 if __name__ == '__main__':
     unittest.main()

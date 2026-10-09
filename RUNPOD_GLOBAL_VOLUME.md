@@ -1,6 +1,12 @@
 # Studio: переход на Runpod Global Volume
 
-Global Volume уже создан. Дальше: обновить образ → загрузить модели через временный GPU Pod → подключить том к Serverless → проверить запуск → подключить Studio.
+Исправление входных файлов: новый `handler.py` сохраняет фото и видео непосредственно в ComfyUI `input/` с уникальными именами. Это устраняет `Unavailable model/option: LoadImage.image = <job>/reference.png`. Для применения обнови `studio/cuda128/serverless/handler.py` в GitHub, пересобери образ и поставь новый commit tag в endpoint. Модели и Global Volume переносить или скачивать повторно не требуется.
+
+Обновление логов: новый `start.sh` выводит ComfyUI одновременно в Container Logs и `/tmp/comfyui.log`. Новый `handler.py` печатает этапы загрузки входных файлов, проверки/отправки графа, принятие prompt и сообщение ожидания каждые 30 секунд. Само сообщение ожидания не означает прогресс сэмплирования; реальный прогресс смотрится в выводе ComfyUI. Для диагностики уже запущенного старого образа в терминале воркера: `tail -n 100 /tmp/comfyui.log` и `nvidia-smi`.
+
+Исправление совместимости и загрузки моделей: образ закрепляет `onnxruntime-gpu==1.23.2` для PyTorch CUDA 12.8 / cuDNN 9. Установка custom nodes сохраняет эту версию через constraints. Перед приёмом заданий `preflight.py` проверяет инициализацию ONNX CUDA Execution Provider и выполняет маленький Add-граф; CPU fallback считается ошибкой старта. На Global Volume ComfyUI запускается с `--disable-dynamic-vram --disable-mmap`, чтобы не подгружать веса послойно через объектное хранилище. Применение требует обновить Dockerfile и папку `serverless`, start.sh, пересобрать образ и заменить тег в endpoint. Скорость и расход памяти на настоящей генерации после этих изменений ещё не измерены.
+
+Global Volume уже создан. Дальше: обновить образ → загрузить модели через временный GPU Pod → подключить том к Serverless → проверить запуск → подключить Studio. Обновление 10 октября: поддерживается прямое скачивание моделей на Global Volume через `--global-write` без промежуточной копии на Container Disk.
 
 Подготовлен режим `MODEL_STORAGE=global`: воркер только проверяет готовность моделей и читает их, без блокировок, переименований и записи на Global Volume. Обычные Network Volumes сохраняют прежний режим `MODEL_STORAGE=network`.
 
@@ -24,7 +30,7 @@ Global Volume уже создан. Дальше: обновить образ →
 2. Выбери GPU и образ **Runpod PyTorch** с Python и доступом к терминалу. Наш Serverless-образ сюда не ставь: он сам запускает воркер.
 3. Если старый Network Volume содержит готовые модели, добавь его в Storage → Persistent storage → Add volume. Pod должен запускаться в датацентре старого Network Volume.
 4. При стандартных путях с двумя томами: Network Volume находится в `/workspace`, Global Volume — в `/workspace-global`. С одним Global Volume: он находится в `/workspace`.
-5. Если модели надо скачать заново, выстави Container Disk **100 GB**, чтобы временные 56,05 GiB моделей поместились. С готовым Network Volume такой запас не нужен.
+5. Для прямого скачивания на Global Volume модельные файлы не занимают Container Disk; увеличивать его до 100 GB не требуется. Потребуется место только для окружения и скриптов. Ранее описанный способ с `/tmp/ofm-models` требовал 100 GB.
 6. Запусти Pod → Connect → терминал / Jupyter Terminal. Проверь фактические mount paths в Console и Storage перед командами ниже.
 
 Официальные инструкции: [Global Volumes для Pods](https://docs.runpod.io/storage/globalvolume/globalvolume-pods).
@@ -65,20 +71,31 @@ python publish_global.py --source /workspace/models --destination /workspace-glo
 
 Вставь токен из локального `Runpod/hf_token.txt` в скрытый ввод. В команду или GitHub его не вставляй.
 
-## 4Б. Если старого тома с моделями нет: скачать заново
+## 4Б. Скачать модели заново прямо на Global Volume
 
-С одним подключённым Global Volume стандартный путь — `/workspace`. Скачиваем сначала на обычный временный диск `/tmp`, затем копируем на Global Volume.
+С одним подключённым Global Volume стандартный путь — `/workspace`; с двумя томами — `/workspace-global`. Команды ниже рассчитаны на **два тома** и путь `/workspace-global`. При одном томе замени его на `/workspace`.
+
+Обнови исходники до версии с `--global-write`; если репозиторий уже клонирован, повторный `git clone` не нужен:
 
 ```bash
-df -h /tmp
-read -r -s -p 'HF token: ' HF_TOKEN; echo
-export HF_TOKEN
-python prepare_models.py --root /tmp/ofm-models
-unset HF_TOKEN
-python publish_global.py --source /tmp/ofm-models --destination /workspace/models
+git -C /tmp/ofm-runpod pull --ff-only
+cd /tmp/ofm-runpod/studio/cuda128/serverless
+python prepare_models.py --help
 ```
 
-Если Global Volume у тебя смонтирован в другом месте, замени `/workspace/models` на его фактический путь плюс `/models`. Не указывай Global Volume как `--root` обычного загрузчика: ему нужен диск с полной поддержкой файловых операций.
+В справке должен быть `--global-write`. Запускай один загрузчик на том и не запускай inference-воркеры до завершения скачивания.
+
+```bash
+read -r -s -p 'HF token: ' HF_TOKEN; echo
+export HF_TOKEN
+python prepare_models.py --root /workspace-global/models --global-write
+unset HF_TOKEN
+python prepare_models.py --root /workspace-global/models --check --readonly
+```
+
+Скачивается 56,05 GiB непосредственно на Global Volume. Проверка свободного места Container Disk не применяется: размер, возвращаемый `df` для объектного тома, не отражает его эластичную ёмкость. После закрытия файла проверяются размер и SHA-256, затем записывается маркер готовности. Неполные файлы не допускаются к генерации. Нет файловых блокировок, атомарного переименования, hard links или `fsync`.
+
+При обрыве повтори ввод токена и команду скачивания: готовые файлы пропускаются, частичные продолжаются через HTTP Range при поддержке файловой системой. Если mount не поддерживает продолжение записи, загрузку такого файла потребуется начать заново. Обычный загрузчик без `--global-write` для Global Volume не подходит.
 
 ## 5. Проверить перенос
 

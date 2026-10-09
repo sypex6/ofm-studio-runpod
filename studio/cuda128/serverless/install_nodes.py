@@ -10,7 +10,8 @@ lock = json.loads(Path(__file__).with_name('nodes.lock.json').read_text())
 constraints = Path('/opt/torch-constraints.txt')
 import torch, torchvision, torchaudio
 constraints.write_text('\n'.join(f'{name}=={module.__version__}' for name, module in
-                                [('torch', torch), ('torchvision', torchvision), ('torchaudio', torchaudio)]) + '\n')
+                                [('torch', torch), ('torchvision', torchvision), ('torchaudio', torchaudio)])
+                       + '\nonnxruntime-gpu==' + os.environ.get('ONNXRUNTIME_GPU_VERSION', '1.23.2') + '\n')
 for entry in lock:
     target = root / 'custom_nodes' / entry['name']
     subprocess.run(['git', 'clone', '--filter=blob:none', entry['url'], str(target)], check=True)

@@ -2,6 +2,9 @@
 import os
 import requests
 from graph import native, wrapper, validate_graph
+from runtime_checks import check_onnx_cuda
+
+check_onnx_cuda()
 
 info = requests.get('http://127.0.0.1:8188/object_info', timeout=120).json()
 params = dict(width=480, height=832, fps=30, steps=4, seed=0, prompt='A person moving naturally')

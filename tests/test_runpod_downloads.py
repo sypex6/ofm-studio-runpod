@@ -113,6 +113,32 @@ class DownloadTests(unittest.TestCase):
                 download(self.model, self.target, retry_delay=0)
         self.assertFalse(self.server.calls)
 
+    def test_global_download_uses_no_disk_guard_rename_or_fsync(self):
+        marker = self.target.with_suffix('.bin.complete.json')
+        marker.write_text('old readiness')
+        with patch('studio.cuda128.serverless.prepare_models.shutil.disk_usage',
+                   side_effect=AssertionError('object storage is not local disk')), \
+                patch.object(Path, 'replace', side_effect=AssertionError('atomic rename')), \
+                patch('os.fsync', side_effect=AssertionError('POSIX fsync')):
+            download(self.model, self.target, retry_delay=0, object_storage=True)
+        self.assertEqual(self.target.read_bytes(), PAYLOAD)
+        self.assertFalse(marker.exists())
+        self.assertEqual([p.name for p in self.target.parent.iterdir()], ['model.bin'])
+
+    def test_global_partial_resumes_directly(self):
+        self.target.write_bytes(PAYLOAD[:100])
+        self.target.with_suffix('.bin.download.json').write_text(json.dumps(self.model['sha256']))
+        download(self.model, self.target, retry_delay=0, object_storage=True)
+        self.assertEqual(self.server.calls[0]['Range'], 'bytes=100-')
+        self.assertEqual(self.target.read_bytes(), PAYLOAD)
+
+    def test_global_corrupt_download_never_gets_ready_marker(self):
+        self.server.mode = 'corrupt'
+        with self.assertRaises(RuntimeError):
+            download(self.model, self.target, attempts=1, retry_delay=0, object_storage=True)
+        self.assertFalse(self.target.exists())
+        self.assertFalse(self.target.with_suffix('.bin.complete.json').exists())
+
 
 if __name__ == '__main__':
     unittest.main()

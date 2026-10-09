@@ -19,6 +19,13 @@ elif [ "${DOWNLOAD_MODELS:-0}" = '1' ]; then
 else
     python prepare_models.py --check --profiles "$profiles"
 fi
+storage_args=()
+if [ "${MODEL_STORAGE:-network}" = 'global' ]; then
+    # Object storage is not local NVMe: avoid layer-wise lazy reads through mmap.
+    # Keep ordinary adaptive VRAM management instead of forcing all models to fit.
+    storage_args=(--disable-dynamic-vram --disable-mmap)
+    echo 'Global Volume: eager model loading; dynamic VRAM and mmap disabled'
+fi
 cat > /opt/ComfyUI/extra_model_paths.yaml <<'YAML'
 network_volume:
   base_path: /runpod-volume/models
@@ -33,7 +40,7 @@ network_volume:
   detection: detection
 YAML
 python /opt/ComfyUI/main.py --listen 127.0.0.1 --port 8188 \
-    --disable-auto-launch --preview-method none --use-pytorch-cross-attention > /tmp/comfyui.log 2>&1 &
+    --disable-auto-launch --preview-method none --use-pytorch-cross-attention "${storage_args[@]}" > >(tee /tmp/comfyui.log) 2>&1 &
 comfy_pid=$!
 worker_pid=''
 cleanup() {

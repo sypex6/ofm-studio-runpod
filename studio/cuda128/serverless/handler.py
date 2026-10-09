@@ -16,8 +16,10 @@ import requests
 
 try:
     from .graph import native, wrapper, validate_graph
+    from .events import ComfyEvents
 except ImportError:
     from graph import native, wrapper, validate_graph
+    from events import ComfyEvents
 
 COMFY = 'http://127.0.0.1:8188'
 ROOT = Path(os.environ.get('COMFY_ROOT', '/opt/ComfyUI'))
@@ -86,36 +88,78 @@ def checked_input(data):
 
 
 def execute(graph, output_node, job, progress):
-    info = requests.get(COMFY + '/object_info', timeout=60).json()
+    print('ComfyUI: validating workflow', flush=True)
+    registry = requests.get(COMFY + '/object_info', timeout=60)
+    registry.raise_for_status()
+    info = registry.json()
     validate_graph(graph, info)
-    response = requests.post(COMFY + '/prompt', json={'prompt': graph, 'client_id': uuid.uuid4().hex}, timeout=60)
-    if response.status_code != 200:
-        detail = response.json().get('node_errors', {})
-        raise RuntimeError('ComfyUI rejected workflow: ' + json.dumps(detail)[:2000])
-    prompt_id = response.json()['prompt_id']
+    print('ComfyUI: submitting workflow', flush=True)
+    client_id=uuid.uuid4().hex
+    events=ComfyEvents(COMFY,client_id)
+    try:
+        response = requests.post(COMFY + '/prompt', json={'prompt': graph, 'client_id': client_id}, timeout=60)
+        if response.status_code != 200:
+            detail = response.json().get('node_errors', {})
+            raise RuntimeError('ComfyUI rejected workflow: ' + json.dumps(detail)[:2000])
+        prompt_id = response.json()['prompt_id']
+    except BaseException:
+        events.close()
+        raise
+    print('ComfyUI: accepted prompt ' + prompt_id, flush=True)
+    started = time.monotonic()
+    heartbeat = started + 30
     deadline = time.monotonic() + TIMEOUT
+    last_node=None
     try:
         while time.monotonic() < deadline:
-            result = requests.get(COMFY + '/history/' + prompt_id, timeout=30).json().get(prompt_id)
-            if result:
-                status = result.get('status', {})
+            history = requests.get(COMFY + '/history/' + prompt_id, timeout=30)
+            history.raise_for_status()
+            result = history.json().get(prompt_id)
+            observed=events.state(prompt_id)
+            if observed.get('error'):
+                raise RuntimeError('ComfyUI: '+observed['error'])
+            node=observed.get('node')
+            if node and node!=last_node:
+                last_node=node
+                label=graph.get(node,{}).get('class_type',node)
+                message='ComfyUI: node '+node+' '+label
+                print(message,flush=True)
+                progress(job,message)
+            final_event = observed.get('outputs',{}).get(output_node,{})
+            # In this trusted graph the selected output node is the terminal
+            # video encoder. Its executed event means the encoder returned and
+            # closed the output, even if aggregate history has not arrived yet.
+            # A file alone, preview node or unfinished batched encoder is insufficient.
+            final_finished = bool(final_event) and not final_event.get('unfinished_batch')
+            if result or final_finished:
+                status = (result or {}).get('status', {})
                 if status.get('status_str') == 'error':
                     raise RuntimeError('ComfyUI generation failed; see worker logs')
-                if status.get('completed'):
-                    outputs = result.get('outputs', {}).get(output_node, {})
+                if status.get('completed') or final_finished:
+                    outputs = (result or {}).get('outputs', {}).get(output_node, {}) or final_event
                     for video in reversed(outputs.get('gifs', []) + outputs.get('videos', [])):
                         directory = ROOT / ('output' if video.get('type') == 'output' else 'temp')
                         path = (directory / video.get('subfolder', '') / video['filename']).resolve()
                         if path.is_relative_to(directory.resolve()) and path.suffix.lower() == '.mp4' and path.is_file():
                             return path
                     raise RuntimeError('Workflow completed without an MP4 output')
+            if time.monotonic() >= heartbeat:
+                label=graph.get(last_node,{}).get('class_type','awaiting execution')
+                step=observed.get('progress')
+                message=f'ComfyUI: {label}, elapsed={int(time.monotonic()-started)}s'+(f', step={step[0]}/{step[1]}' if step else '')
+                print(message,flush=True)
+                progress(job,message)
+                heartbeat = time.monotonic() + 30
             time.sleep(2)
         raise TimeoutError('ComfyUI generation timeout')
     except BaseException:
-        requests.post(COMFY + '/interrupt', timeout=10)
+        try:requests.post(COMFY + '/interrupt', timeout=10)
+        except requests.RequestException:print('ComfyUI interrupt request failed',flush=True)
         raise
     finally:
-        requests.post(COMFY + '/history', json={'delete': [prompt_id]}, timeout=10)
+        events.close()
+        try:requests.post(COMFY + '/history', json={'delete': [prompt_id]}, timeout=10)
+        except requests.RequestException:print('ComfyUI history cleanup request failed',flush=True)
 
 
 def handler(job, progress=None):
@@ -123,6 +167,9 @@ def handler(job, progress=None):
         import runpod
         progress = runpod.serverless.progress_update
     with LOCK:
+        def report(message):
+            print('Studio worker: ' + message, flush=True)
+            progress(job, message)
         workflow, params, upload = checked_input(job['input'])
         token = uuid.uuid4().hex
         # LoadImage's combo enumerates only files directly inside input/.
@@ -133,7 +180,7 @@ def handler(job, progress=None):
         image, video = directory / (token + '_reference.png'), directory / (token + '_motion.mp4')
         prefix = 'studio/' + token + '/result'
         try:
-            progress(job, 'Downloading inputs')
+            report('Downloading inputs')
             fetch(job['input']['image_url'], image, 20 * 1024**2)
             fetch(job['input']['video_url'], video, 512 * 1024**2)
             probe = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
@@ -150,13 +197,13 @@ def handler(job, progress=None):
             frames = max(1, int(requested * params['fps']))
             # Wan requires 4n+1 frames; use only frames actually present in reference.
             frames = max(1, ((frames - 1) // 4) * 4 + 1)
-            progress(job, 'Generating video')
+            report('Generating video')
             builder = native if workflow == 'animate-ki' else wrapper
             graph, output = builder(image.name, video.name, params, frames, prefix)
             path = execute(graph, output, job, progress)
             if path.stat().st_size > 512 * 1024**2:
                 raise ValueError('Result exceeds Studio video size limit')
-            progress(job, 'Saving result to Studio')
+            report('Saving result to Studio')
             # Retrying delivery does not repeat GPU generation; callback is idempotent.
             for attempt in range(3):
                 try:
@@ -177,7 +224,10 @@ def handler(job, progress=None):
             for kind in ('output', 'temp'):
                 shutil.rmtree(ROOT / kind / 'studio' / token, ignore_errors=True)
             # Drop cached input/output tensors so a warm worker does not retain user data.
-            requests.post(COMFY + '/free', json={'unload_models': False, 'free_memory': True}, timeout=30)
+            try:
+                requests.post(COMFY + '/free', json={'unload_models': False, 'free_memory': True}, timeout=30)
+            except requests.RequestException:
+                print('ComfyUI cache cleanup request failed; result delivery status preserved',flush=True)
 
 
 if __name__ == '__main__':
