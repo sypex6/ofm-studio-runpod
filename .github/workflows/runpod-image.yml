@@ -25,6 +25,7 @@ jobs:
           python -m pip install requests filelock
           python -m unittest discover -s tests -p 'test_runpod_graph.py'
           python -m unittest discover -s tests -p 'test_runpod_downloads.py'
+          python -m unittest discover -s tests -p 'test_runpod_global.py'
       - name: Image name
         run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ofm-studio-runpod" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@v3
