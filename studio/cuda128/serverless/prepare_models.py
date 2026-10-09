@@ -1,5 +1,6 @@
 """Verified resumable HTTP downloads directly onto the network volume; no Hub/Xet cache."""
 import argparse
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -96,18 +97,30 @@ def download(model, target, token=None, attempts=5, retry_delay=5):
         time.sleep(retry_delay)
 
 
-def prepare(root, profiles, check=False, include_optional=False):
-    from filelock import FileLock
+def prepare(root, profiles, check=False, include_optional=False, readonly=False):
+    if readonly and not check:
+        raise ValueError('Global Volume is read-only in workers; publish models from a temporary Pod first')
     models = json.loads(Path(__file__).with_name('models.json').read_text())
     root = Path(root)
-    root.mkdir(parents=True, exist_ok=True)
+    if readonly:
+        if not root.is_dir():
+            raise SystemExit('Global Volume models directory is missing; publish models before starting workers')
+    else:
+        root.mkdir(parents=True, exist_ok=True)
     selected = [m for m in models if set(m['profiles']) & set(profiles)
                 and (include_optional or not m.get('optional'))]
-    usage = shutil.disk_usage(root)
-    print(f'Model Volume: {root}, total={usage.total / 2**30:.2f} GiB, free={usage.free / 2**30:.2f} GiB; '
+    print(f'Model Volume: {root}, readonly={readonly}; '
           f'selected models={sum(m["size"] for m in selected) / 2**30:.2f} GiB', flush=True)
+    if not readonly:
+        usage = shutil.disk_usage(root)
+        print(f'Volume total={usage.total / 2**30:.2f} GiB, free={usage.free / 2**30:.2f} GiB', flush=True)
     missing = []
-    with FileLock(str(root / '.prepare.lock'), timeout=7200):
+    if readonly:
+        guard = nullcontext()
+    else:
+        from filelock import FileLock
+        guard = FileLock(str(root / '.prepare.lock'), timeout=7200)
+    with guard:
         for model in selected:
             target = root / model['path']
             if not target.resolve().is_relative_to(root.resolve()):
@@ -144,7 +157,10 @@ def prepare(root, profiles, check=False, include_optional=False):
             marker_temp.replace(marker)
             print('Ready:', model['path'], flush=True)
     if missing:
-        raise SystemExit('Missing/incomplete models: ' + ', '.join(missing) + '. Set DOWNLOAD_MODELS=1 first.')
+        hint = ('Publish models from a temporary Pod, then replace workers.' if readonly
+                else 'Set DOWNLOAD_MODELS=1 first.')
+        raise SystemExit('Missing/incomplete models: ' + ', '.join(missing) + '. ' + hint)
+    print('Models ready: ' + str(len(selected)), flush=True)
 
 
 if __name__ == '__main__':
@@ -153,8 +169,9 @@ if __name__ == '__main__':
     parser.add_argument('--profiles', default='animate-ki,animate-wrapper')
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--include-optional', action='store_true')
+    parser.add_argument('--readonly', action='store_true', help='Check Global Volume without locks or writes')
     args = parser.parse_args()
     profiles = args.profiles.split(',')
     if not set(profiles) <= {'animate-ki', 'animate-wrapper'}:
         parser.error('Unknown profile')
-    prepare(args.root, profiles, args.check, args.include_optional)
+    prepare(args.root, profiles, args.check, args.include_optional, args.readonly)

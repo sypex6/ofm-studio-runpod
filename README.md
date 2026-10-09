@@ -1,5 +1,7 @@
 # Studio → Runpod Serverless
 
+**Для созданного Global Volume используй [отдельный актуальный гайд](RUNPOD_GLOBAL_VOLUME.md).** Ниже описан прежний вариант с региональным Network Volume. Новый образ поддерживает оба варианта через `MODEL_STORAGE=network` или `global`.
+
 Обновлено по `Runpod/Workflows`: **Kiara Animate** и **SSIBAL Animate**, включая присланные API-версии. Подготовлены исходники образа. Сборку нужно выполнить в GitHub Actions; новый образ и GPU-генерация ещё должны пройти проверку на Runpod.
 
 Цепочка Studio: фото модели + первые кадры + видеореференсы → опциональный Gemini 3 Flash через Siray по теме пользователя → Nano Banana 2 → готовое фото → Runpod / ComfyUI → MP4 в личной библиотеке. Автопромптер и подготовку фото можно отключать.

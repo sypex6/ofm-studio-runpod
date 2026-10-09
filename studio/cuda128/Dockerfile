@@ -1,7 +1,7 @@
-# Build context: studio/cuda128. Models live on Network Volume, never in the image.
+# Build context: studio/cuda128. Models live on an attached Volume, never in the image.
 FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 \
-    COMFY_ROOT=/opt/ComfyUI HF_HOME=/runpod-volume/huggingface HF_HUB_DISABLE_XET=1 \
+    COMFY_ROOT=/opt/ComfyUI HF_HOME=/tmp/huggingface HF_HUB_DISABLE_XET=1 \
     WORKFLOW_PROFILES=animate-ki,animate-wrapper
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git ffmpeg libgl1 libglib2.0-0 build-essential curl ca-certificates \

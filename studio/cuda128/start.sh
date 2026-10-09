@@ -1,11 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 cd /opt/studio-worker/serverless
-test -d /runpod-volume || { echo 'Attach a Runpod Network Volume at /runpod-volume'; exit 1; }
+test -d /runpod-volume || { echo 'Attach a Runpod Volume at /runpod-volume'; exit 1; }
 test -n "${STUDIO_HOST:-}" || { echo 'Set STUDIO_HOST to the Studio hostname'; exit 1; }
 df -h /runpod-volume /tmp
 profiles="${WORKFLOW_PROFILES:-animate-ki,animate-wrapper}"
-if [ "${DOWNLOAD_MODELS:-0}" = '1' ]; then
+if [ "${MODEL_STORAGE:-network}" = 'global' ]; then
+    if [ "${DOWNLOAD_MODELS:-0}" = '1' ]; then
+        echo 'Global Volume: set DOWNLOAD_MODELS=0 and publish models from a temporary Pod first'
+        exit 1
+    fi
+    python prepare_models.py --check --readonly --profiles "$profiles"
+elif [ "${MODEL_STORAGE:-network}" != 'network' ]; then
+    echo 'MODEL_STORAGE must be network or global'
+    exit 1
+elif [ "${DOWNLOAD_MODELS:-0}" = '1' ]; then
     python prepare_models.py --profiles "$profiles"
 else
     python prepare_models.py --check --profiles "$profiles"
