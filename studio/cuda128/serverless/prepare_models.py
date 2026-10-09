@@ -1,4 +1,4 @@
-"""Verified resumable HTTP downloads directly onto the network volume; no Hub/Xet cache."""
+"""Verified HTTP downloads onto Network or Global Volumes; no Hub/Xet cache."""
 import argparse
 from contextlib import nullcontext
 import hashlib
@@ -24,10 +24,15 @@ def verified(path, model):
             and sha256(path) == model['sha256'])
 
 
-def download(model, target, token=None, attempts=5, retry_delay=5):
+def download(model, target, token=None, attempts=5, retry_delay=5, object_storage=False):
     import requests
-    temporary = target.with_suffix(target.suffix + '.part')
-    state = temporary.with_suffix(temporary.suffix + '.json')
+    # On object storage write the final file directly. It remains unusable until
+    # prepare() writes a verified completion marker. Never run workers during upload.
+    temporary = target if object_storage else target.with_suffix(target.suffix + '.part')
+    state = (target.with_suffix(target.suffix + '.download.json') if object_storage
+             else temporary.with_suffix(temporary.suffix + '.json'))
+    if object_storage:
+        target.with_suffix(target.suffix + '.complete.json').unlink(missing_ok=True)
     try:
         previous = json.loads(state.read_text())
     except (OSError, ValueError):
@@ -42,18 +47,20 @@ def download(model, target, token=None, attempts=5, retry_delay=5):
     for attempt in range(attempts):
         offset = temporary.stat().st_size if temporary.exists() else 0
         if offset == model['size'] and verified(temporary, model):
-            temporary.replace(target)
+            if not object_storage:
+                temporary.replace(target)
             state.unlink(missing_ok=True)
             return
         if offset >= model['size']:
             temporary.unlink()
             offset = 0
-        free = shutil.disk_usage(target.parent).free
-        needed = model['size'] - offset
-        if free < needed + 256 * 1024 * 1024:
-            raise RuntimeError(f"Insufficient Volume space for {model['path']}: "
-                               f"free={free / 2**30:.2f} GiB, remaining={needed / 2**30:.2f} GiB. "
-                               'Increase Network Volume or inspect old cache/files.')
+        if not object_storage:
+            free = shutil.disk_usage(target.parent).free
+            needed = model['size'] - offset
+            if free < needed + 256 * 1024 * 1024:
+                raise RuntimeError(f"Insufficient Volume space for {model['path']}: "
+                                   f"free={free / 2**30:.2f} GiB, remaining={needed / 2**30:.2f} GiB. "
+                                   'Increase Network Volume or inspect old cache/files.')
         request_headers = {**headers, **({'Range': f'bytes={offset}-'} if offset else {})}
         print(f"Downloading: {model['path']} from {offset / 2**30:.2f} GiB", flush=True)
         try:
@@ -76,12 +83,14 @@ def download(model, target, token=None, attempts=5, retry_delay=5):
                             raise RuntimeError('Download exceeds expected size')
                         stream.write(chunk)
                     stream.flush()
-                    os.fsync(stream.fileno())
+                    if not object_storage:
+                        os.fsync(stream.fileno())
             if not verified(temporary, model):
                 if temporary.stat().st_size == model['size']:
                     temporary.unlink()
                 raise RuntimeError('Download size/SHA-256 mismatch')
-            temporary.replace(target)
+            if not object_storage:
+                temporary.replace(target)
             state.unlink(missing_ok=True)
             return
         except (requests.RequestException, RuntimeError) as exc:
@@ -90,14 +99,16 @@ def download(model, target, token=None, attempts=5, retry_delay=5):
                 raise RuntimeError(f"Download failed: {model['path']} ({type(exc).__name__}, HTTP {status})") from None
         except OSError as exc:
             if exc.errno in (28, 122):
-                raise RuntimeError('Network Volume quota exceeded; inspect df/du or increase its size') from None
+                raise RuntimeError('Storage quota exceeded; inspect volume configuration and account limits') from None
             if attempt + 1 == attempts:
                 raise RuntimeError(f"Download failed: {model['path']} ({type(exc).__name__})") from None
         print(f"Retrying: {model['path']} ({attempt + 1}/{attempts})", flush=True)
         time.sleep(retry_delay)
 
 
-def prepare(root, profiles, check=False, include_optional=False, readonly=False):
+def prepare(root, profiles, check=False, include_optional=False, readonly=False, global_write=False):
+    if global_write and (readonly or check):
+        raise ValueError('--global-write cannot be combined with --check or --readonly')
     if readonly and not check:
         raise ValueError('Global Volume is read-only in workers; publish models from a temporary Pod first')
     models = json.loads(Path(__file__).with_name('models.json').read_text())
@@ -111,11 +122,13 @@ def prepare(root, profiles, check=False, include_optional=False, readonly=False)
                 and (include_optional or not m.get('optional'))]
     print(f'Model Volume: {root}, readonly={readonly}; '
           f'selected models={sum(m["size"] for m in selected) / 2**30:.2f} GiB', flush=True)
-    if not readonly:
+    if global_write:
+        print('Global Volume direct upload: single writer only; start workers AFTER completion.', flush=True)
+    if not readonly and not global_write:
         usage = shutil.disk_usage(root)
         print(f'Volume total={usage.total / 2**30:.2f} GiB, free={usage.free / 2**30:.2f} GiB', flush=True)
     missing = []
-    if readonly:
+    if readonly or global_write:
         guard = nullcontext()
     else:
         from filelock import FileLock
@@ -139,9 +152,14 @@ def prepare(root, profiles, check=False, include_optional=False, readonly=False)
                 missing.append(model['path'])
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
+            # Invalidate readiness before replacing any bytes, even if a prior
+            # upload used another manifest. Global Volume has no atomic rename.
+            if global_write:
+                marker.unlink(missing_ok=True)
             if not verified(target, model):
                 # Adopt old Hub blobs without creating another full copy.
-                candidates = list((root / '.hf-cache').glob(f"*/blobs/{model['sha256']}"))
+                candidates = ([] if global_write else
+                              list((root / '.hf-cache').glob(f"*/blobs/{model['sha256']}")))
                 for cached in candidates:
                     if verified(cached, model):
                         temporary = target.with_suffix(target.suffix + '.part')
@@ -150,11 +168,13 @@ def prepare(root, profiles, check=False, include_optional=False, readonly=False)
                         temporary.replace(target)
                         break
                 else:
-                    download(model, target, os.environ.get('HF_TOKEN') or None)
-            marker_temp = marker.with_suffix(marker.suffix + '.part')
+                    download(model, target, os.environ.get('HF_TOKEN') or None,
+                             object_storage=global_write)
+            marker_temp = marker if global_write else marker.with_suffix(marker.suffix + '.part')
             marker_temp.write_text(json.dumps({'size': target.stat().st_size,
                                               'fingerprint': fingerprint, 'sha256': model['sha256']}))
-            marker_temp.replace(marker)
+            if not global_write:
+                marker_temp.replace(marker)
             print('Ready:', model['path'], flush=True)
     if missing:
         hint = ('Publish models from a temporary Pod, then replace workers.' if readonly
@@ -170,8 +190,10 @@ if __name__ == '__main__':
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--include-optional', action='store_true')
     parser.add_argument('--readonly', action='store_true', help='Check Global Volume without locks or writes')
+    parser.add_argument('--global-write', action='store_true',
+                        help='Single-writer direct upload on a temporary Pod; no staging, locks or rename')
     args = parser.parse_args()
     profiles = args.profiles.split(',')
     if not set(profiles) <= {'animate-ki', 'animate-wrapper'}:
         parser.error('Unknown profile')
-    prepare(args.root, profiles, args.check, args.include_optional, args.readonly)
+    prepare(args.root, profiles, args.check, args.include_optional, args.readonly, args.global_write)
