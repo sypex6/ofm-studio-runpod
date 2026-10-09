@@ -14,7 +14,10 @@ import uuid
 
 import requests
 
-from graph import native, wrapper, validate_graph
+try:
+    from .graph import native, wrapper, validate_graph
+except ImportError:
+    from graph import native, wrapper, validate_graph
 
 COMFY = 'http://127.0.0.1:8188'
 ROOT = Path(os.environ.get('COMFY_ROOT', '/opt/ComfyUI'))
@@ -122,12 +125,15 @@ def handler(job, progress=None):
     with LOCK:
         workflow, params, upload = checked_input(job['input'])
         token = uuid.uuid4().hex
-        directory = ROOT / 'input' / token
-        directory.mkdir(parents=True)
+        # LoadImage's combo enumerates only files directly inside input/.
+        # UUID filenames keep jobs isolated while remaining discoverable by
+        # ComfyUI's actual schema and prompt validation.
+        directory = ROOT / 'input'
+        directory.mkdir(parents=True, exist_ok=True)
+        image, video = directory / (token + '_reference.png'), directory / (token + '_motion.mp4')
         prefix = 'studio/' + token + '/result'
         try:
             progress(job, 'Downloading inputs')
-            image, video = directory / 'reference.png', directory / 'motion.mp4'
             fetch(job['input']['image_url'], image, 20 * 1024**2)
             fetch(job['input']['video_url'], video, 512 * 1024**2)
             probe = subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries',
@@ -146,7 +152,7 @@ def handler(job, progress=None):
             frames = max(1, ((frames - 1) // 4) * 4 + 1)
             progress(job, 'Generating video')
             builder = native if workflow == 'animate-ki' else wrapper
-            graph, output = builder(token + '/reference.png', token + '/motion.mp4', params, frames, prefix)
+            graph, output = builder(image.name, video.name, params, frames, prefix)
             path = execute(graph, output, job, progress)
             if path.stat().st_size > 512 * 1024**2:
                 raise ValueError('Result exceeds Studio video size limit')
@@ -166,7 +172,8 @@ def handler(job, progress=None):
                         raise RuntimeError('Result delivery failed; see worker logs') from None
                     time.sleep(3)
         finally:
-            shutil.rmtree(directory, ignore_errors=True)
+            image.unlink(missing_ok=True)
+            video.unlink(missing_ok=True)
             for kind in ('output', 'temp'):
                 shutil.rmtree(ROOT / kind / 'studio' / token, ignore_errors=True)
             # Drop cached input/output tensors so a warm worker does not retain user data.
